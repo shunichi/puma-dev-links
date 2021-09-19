@@ -1,6 +1,6 @@
 use std::fs;
 use std::cmp::Ordering;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::collections::HashSet;
 use dirs;
 mod options;
@@ -196,6 +196,21 @@ fn unlink_app(option_app_name: Option<String>) -> Option<()> {
     Some(())
 }
 
+fn generate_procfile() -> Option<()> {
+    let template: &str = "web: bundle exec rails s -p `pdl port`
+webpack: ./bin/webpack-dev-server
+job: bundle exec rake jobs:work
+sidekiq: bundle exec sidekiq -C config/sidekiq.yml";
+    let path = Path::new("Procfile.local");
+    if path.exists() {
+        eprintln!("error: '{}' already exists", path.to_string_lossy());
+        return Some(());
+    }
+    fs::write(path, template).ok()?;
+    println!("'{}' is created", path.to_string_lossy());
+    Some(())
+}
+
 fn main() -> () {
     let options = options::parse_opts();
     let result = match options.sub_command {
@@ -203,6 +218,7 @@ fn main() -> () {
         SubCommand::Port { app_name } => { show_port(app_name) },
         SubCommand::Link { app_name } => { link_app(app_name) },
         SubCommand::Unlink { app_name } => { unlink_app(app_name) },
+        SubCommand::Procfile => { generate_procfile() },
     };
     match result {
         Some(_) => std::process::exit(0),

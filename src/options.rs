@@ -6,6 +6,7 @@ pub enum SubCommand {
   Port { app_name: Option<String> },
   Link { app_name: Option<String> },
   Unlink { app_name: Option<String> },
+  Procfile,
 }
 
 pub struct Options {
@@ -41,10 +42,13 @@ pub fn parse_opts() -> Options {
                     .arg(clap::Arg::with_name("APP")
                     .help("App name")
                     .index(1)))
+        .subcommand(clap::SubCommand::with_name("procfile")
+                    .about("Create Procfile template"))
         .get_matches();
 
     match matches.subcommand() {
       ("list", ..) => { Options { sub_command: SubCommand::List } },
+      ("procfile", ..) => { Options { sub_command: SubCommand::Procfile } },
       ("port", args) => {
         Options {
           sub_command: SubCommand::Port { app_name: app_name(args) }
