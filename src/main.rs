@@ -197,7 +197,7 @@ fn unlink_app(option_app_name: Option<String>) -> Option<()> {
 }
 
 fn generate_procfile() -> Option<()> {
-    let template: &str = "web: bundle exec rails s -p `pdl port`
+    let template: &str = "web: bundle exec rails s -b 0.0.0.0 -p `pdl port`
 webpack: ./bin/webpack-dev-server
 job: bundle exec rake jobs:work
 sidekiq: bundle exec sidekiq -C config/sidekiq.yml";
