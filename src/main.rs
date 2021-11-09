@@ -1,14 +1,16 @@
-use std::fs;
-use std::cmp::Ordering;
-use std::path::{PathBuf, Path};
-use std::collections::HashSet;
 use dirs;
+use std::cmp::Ordering;
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 mod options;
 use options::SubCommand;
+use url::Url;
 
 enum EntryType {
     Link { target: String },
     Port { port: i32 },
+    Url { url: Url },
     Invalid,
 }
 
@@ -20,8 +22,9 @@ struct Entry {
 fn entry_type_ord(entry: &Entry) -> i32 {
     match entry.entry_type {
         EntryType::Link { .. } => 0,
-        EntryType::Port { .. } => 1,
-        EntryType::Invalid => 2,
+        EntryType::Url { .. } => 1,
+        EntryType::Port { .. } => 2,
+        EntryType::Invalid => 3,
     }
 }
 
@@ -36,13 +39,11 @@ fn entry_cmp(e1: &Entry, e2: &Entry) -> Ordering {
         EntryType::Port { port, .. } => {
             let port1 = port;
             match e2.entry_type {
-                EntryType::Port { port, .. } => {
-                    port1.cmp(&port)
-                },
-                _ => panic!()
+                EntryType::Port { port, .. } => port1.cmp(&port),
+                _ => panic!(),
             }
-        },
-        _ => e1.name.cmp(&e2.name)
+        }
+        _ => e1.name.cmp(&e2.name),
     }
 }
 
@@ -54,46 +55,69 @@ fn puma_dev_dir() -> Option<PathBuf> {
 
 fn current_dir_basename() -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
-    cwd.file_name().and_then(|name| name.to_str().map(|s| s.to_owned()))
+    cwd.file_name()
+        .and_then(|name| name.to_str().map(|s| s.to_owned()))
+}
+
+fn entry_from_file_content(dir_entry: &fs::DirEntry) -> Option<Entry> {
+    let content = fs::read_to_string(dir_entry.path()).ok()?;
+    let first_line = content.lines().next().unwrap_or("");
+    let file_name = dir_entry.file_name().to_string_lossy().to_string();
+    if let Ok(port) = first_line.parse::<i32>() {
+        return Some(Entry {
+            name: file_name,
+            entry_type: EntryType::Port { port: port },
+        });
+    }
+    if let Ok(url) = Url::parse(first_line) {
+        return Some(Entry {
+            name: file_name,
+            entry_type: EntryType::Url { url: url },
+        });
+    }
+    return Some(Entry {
+        name: file_name,
+        entry_type: EntryType::Invalid,
+    });
 }
 
 fn get_puma_dev_entries() -> Option<Vec<Entry>> {
     let dir_path = puma_dev_dir()?;
     let mut vec = Vec::new();
-    for dir_entry in  fs::read_dir(dir_path).ok()? {
-        let dir = dir_entry.ok()?;
-        let file_type = dir.file_type().ok()?;
-        let file_name = dir.file_name().to_string_lossy().to_string();
+    for e in fs::read_dir(dir_path).ok()? {
+        let dir_entry = e.ok()?;
+        let file_type = dir_entry.file_type().ok()?;
+        let file_name = dir_entry.file_name().to_string_lossy().to_string();
         if file_type.is_symlink() {
-            let target_path = fs::read_link(dir.path()).ok()?;
-            vec.push(Entry { name: file_name, entry_type: EntryType::Link { target: target_path.to_string_lossy().to_string() } });
-        } else if file_type.is_file() {
-            let content = fs::read_to_string(dir.path()).ok()?;
-            let first_line = content.lines().next().unwrap_or("");
-            match first_line.parse::<i32>() {
-                Ok(port) => {
-                    vec.push(Entry { name: file_name, entry_type: EntryType::Port { port: port } });
+            let target_path = fs::read_link(dir_entry.path()).ok()?;
+            vec.push(Entry {
+                name: file_name,
+                entry_type: EntryType::Link {
+                    target: target_path.to_string_lossy().to_string(),
                 },
-                Err(_) => {
-                    vec.push(Entry { name: file_name, entry_type: EntryType::Invalid });
-                }
-            }
+            });
+        } else if file_type.is_file() {
+            vec.push(entry_from_file_content(&dir_entry)?);
         } else {
-            vec.push(Entry { name: file_name, entry_type: EntryType::Invalid });
+            vec.push(Entry {
+                name: file_name,
+                entry_type: EntryType::Invalid,
+            });
         }
     }
-    vec.sort_by(|a, b| entry_cmp(a, b ));
+    vec.sort_by(|a, b| entry_cmp(a, b));
     Some(vec)
 }
 
 fn next_port() -> Option<i32> {
     let entries = get_puma_dev_entries()?;
-    let set: HashSet<_> = entries.iter().filter_map(|e|
-        match e.entry_type {
+    let set: HashSet<_> = entries
+        .iter()
+        .filter_map(|e| match e.entry_type {
             EntryType::Port { port } => Some(port),
             _ => None,
-        }
-    ).collect();
+        })
+        .collect();
     let mut port = 3000;
     loop {
         if !set.contains(&port) {
@@ -124,12 +148,20 @@ fn list_entries() -> Option<()> {
         match entry.entry_type {
             EntryType::Link { target } => {
                 println!("{:width$} -> {}", entry.name, target, width = name_width);
-            },
+            }
             EntryType::Port { port } => {
                 println!("{:width$} {}", entry.name, port, width = name_width);
             }
+            EntryType::Url { url } => {
+                println!(
+                    "{:width$} -> {}",
+                    entry.name,
+                    url.to_string(),
+                    width = name_width
+                );
+            }
             EntryType::Invalid => {
-                println!("{:width$} invalid", entry.name,  width = name_width);
+                println!("{:width$} invalid", entry.name, width = name_width);
             }
         }
     }
@@ -140,19 +172,25 @@ fn show_port(option_app_name: Option<String>) -> Option<()> {
     let (app_name, _) = app_entry_path(option_app_name)?;
     let entries = get_puma_dev_entries()?;
     match entries.iter().find(|e| e.name == app_name) {
-        Some(entry) => {
-            match &entry.entry_type {
-                EntryType::Port { port } => {
-                    print!("{}", port);
-                },
-                EntryType::Link { target } =>  {
-                    eprintln!("error: '{}' is symlink to '{}'", app_name, target);
-                    return None;
-                },
-                EntryType::Invalid =>  {
-                    eprintln!("error: '{}' is invalid entry", app_name);
-                    return None;
-                },
+        Some(entry) => match &entry.entry_type {
+            EntryType::Port { port } => {
+                print!("{}", port);
+            }
+            EntryType::Url { url } => {
+                eprintln!(
+                    "error: '{}' is a url proxy to '{}'",
+                    app_name,
+                    url.to_string()
+                );
+                return None;
+            }
+            EntryType::Link { target } => {
+                eprintln!("error: '{}' is a symlink to '{}'", app_name, target);
+                return None;
+            }
+            EntryType::Invalid => {
+                eprintln!("error: '{}' is an invalid entry", app_name);
+                return None;
             }
         },
         None => {
@@ -165,7 +203,7 @@ fn show_port(option_app_name: Option<String>) -> Option<()> {
 
 fn link_app(option_app_name: Option<String>) -> Option<()> {
     let (app_name, path) = app_entry_path(option_app_name)?;
-    if path.exists(){
+    if path.exists() {
         eprintln!("error: '{}' already exists", path.to_string_lossy());
         return Some(());
     }
@@ -177,7 +215,7 @@ fn link_app(option_app_name: Option<String>) -> Option<()> {
 
 fn unlink_app(option_app_name: Option<String>) -> Option<()> {
     let (app_name, path) = app_entry_path(option_app_name)?;
-    if !path.exists(){
+    if !path.exists() {
         eprintln!("error: app '{}' does not exists", app_name);
         return Some(());
     }
@@ -214,11 +252,11 @@ sidekiq: bundle exec sidekiq -C config/sidekiq.yml";
 fn main() -> () {
     let options = options::parse_opts();
     let result = match options.sub_command {
-        SubCommand::List => { list_entries() },
-        SubCommand::Port { app_name } => { show_port(app_name) },
-        SubCommand::Link { app_name } => { link_app(app_name) },
-        SubCommand::Unlink { app_name } => { unlink_app(app_name) },
-        SubCommand::Procfile => { generate_procfile() },
+        SubCommand::List => list_entries(),
+        SubCommand::Port { app_name } => show_port(app_name),
+        SubCommand::Link { app_name } => link_app(app_name),
+        SubCommand::Unlink { app_name } => unlink_app(app_name),
+        SubCommand::Procfile => generate_procfile(),
     };
     match result {
         Some(_) => std::process::exit(0),

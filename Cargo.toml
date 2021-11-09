@@ -10,3 +10,4 @@ license = "MIT"
 [dependencies]
 dirs = "3.0.1"
 clap = "2.33.3"
+url = "2.2.2"
